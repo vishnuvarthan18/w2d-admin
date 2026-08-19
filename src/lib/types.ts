@@ -1,8 +1,19 @@
 import type { Timestamp } from 'firebase/firestore';
 
+import type { BusinessCategory } from './categories';
+
+/**
+ * @deprecated Superseded by the 29-item `category` field (DECISIONS.md §7, §9).
+ * Kept because the field still exists on every document — removal is a
+ * separate, not-yet-approved migration.
+ */
 export type UserType = 'vendor' | 'manufacturer';
 
-/** Soft account flag — suspended users cannot post (mobile createListing check). */
+/**
+ * Soft account flag — suspended users may still sign in, then hit a full
+ * lockout screen (`/(auth)/suspended`) with no access past it.
+ * createListing also rejects as defense in depth.
+ */
 export type UserStatus = 'active' | 'suspended';
 
 export type ListingStatus =
@@ -24,6 +35,11 @@ export interface UserDoc {
   name: string;
   businessName: string;
   userType: UserType;
+  /**
+   * The 29-item business category (§9). Absent on pre-migration documents —
+   * render a fallback, never assume it is set.
+   */
+  category?: BusinessCategory;
   district: string;
   phone: string;
   categories?: string[];
@@ -41,6 +57,8 @@ export interface ListingDoc {
   sellerName?: string;
   sellerBusinessName?: string;
   sellerUserType?: UserType;
+  /** Denormalized seller category (§3). Absent on older/legacy docs. */
+  sellerCategory?: BusinessCategory;
   postType: PostType;
   title: string;
   category: string;

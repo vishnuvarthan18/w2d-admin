@@ -60,11 +60,20 @@ async function main() {
   assert(users.size === 8, `expected 8 users, got ${users.size}`);
   assert(listings.size === 25, `expected 25 listings, got ${listings.size}`);
   assert(pending.length >= 1, `expected ≥1 pending, got ${pending.length}`);
+  // Legacy role split — `userType` is superseded by `category` (§7, §9) but is
+  // intentionally still written, so this assertion still holds during migration.
   assert(vendors.length === 4 && manufacturers.length === 4, 'role split 4/4');
+  // Migration state: seed.mjs deliberately categorises some users and leaves
+  // the rest absent, so both the populated and fallback paths get exercised.
+  const categorised = users.docs.filter((d) => Boolean(d.data().category));
+  assert(
+    categorised.length > 0 && categorised.length < users.size,
+    `expected a MIX of categorised/uncategorised seed users, got ${categorised.length}/${users.size}`,
+  );
   assert(interests.size >= 1, 'expected ≥1 interest');
   assert(reports.size >= 1, 'expected ≥1 report');
   results.push(
-    `A2.1 metrics: PASS (users=${users.size} v=${vendors.length}/m=${manufacturers.length} listings=${listings.size} pending=${pending.length} interests=${interests.size} reports=${reports.size})`,
+    `A2.1 metrics: PASS (users=${users.size} v=${vendors.length}/m=${manufacturers.length} categorised=${categorised.length} listings=${listings.size} pending=${pending.length} interests=${interests.size} reports=${reports.size})`,
   );
 
   // --- A3.2 suspend/verify ---

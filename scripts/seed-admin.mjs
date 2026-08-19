@@ -84,6 +84,13 @@ async function main() {
   });
 
   // Ensure a couple of seed users have explicit status/verified for A3 tests.
+  //
+  // NOTE: this script deliberately does NOT write `category` (DECISIONS.md §9).
+  // Despite §13's note, it never seeded `userType` either — these are
+  // status/verified merges only. Category fixture data is owned solely by
+  // `w2d-app/scripts/seed.mjs`, which already assigns categories to a subset of
+  // seed users; writing it here too would duplicate the values across two repos
+  // and let them drift.
   await db.collection('users').doc('seed-user-1').set(
     { status: 'active', verified: false },
     { merge: true },

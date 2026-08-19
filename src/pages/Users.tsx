@@ -7,10 +7,13 @@ import {
   type Timestamp,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { BUSINESS_CATEGORIES } from '../lib/categories';
 import type { ListingDoc, UserDoc, UserStatus } from '../lib/types';
 
 const DISTRICTS_FILTER = 'all';
-const TYPES_FILTER = 'all';
+const CATEGORY_FILTER = 'all';
+/** Accounts with no `category` yet — the ones needing migration (§3). */
+const CATEGORY_NONE = 'none';
 
 function formatDate(ts: Timestamp | null | undefined): string {
   if (!ts || typeof ts.toDate !== 'function') return '—';
@@ -27,7 +30,7 @@ export function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [userType, setUserType] = useState<string>(TYPES_FILTER);
+  const [category, setCategory] = useState<string>(CATEGORY_FILTER);
   const [district, setDistrict] = useState<string>(DISTRICTS_FILTER);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -72,7 +75,11 @@ export function UsersPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return users.filter((u) => {
-      if (userType !== TYPES_FILTER && u.userType !== userType) return false;
+      if (category === CATEGORY_NONE) {
+        if (u.category) return false;
+      } else if (category !== CATEGORY_FILTER && u.category !== category) {
+        return false;
+      }
       if (district !== DISTRICTS_FILTER && u.district !== district) return false;
       if (!q) return true;
       return (
@@ -81,7 +88,7 @@ export function UsersPage() {
         (u.phone ?? '').includes(q)
       );
     });
-  }, [users, search, userType, district]);
+  }, [users, search, category, district]);
 
   async function setUserStatus(userId: string, status: UserStatus) {
     setBusyId(userId);
@@ -142,10 +149,14 @@ export function UsersPage() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <select value={userType} onChange={(e) => setUserType(e.target.value)}>
-          <option value={TYPES_FILTER}>All roles</option>
-          <option value="vendor">Vendor</option>
-          <option value="manufacturer">Manufacturer</option>
+        <select value={category} onChange={(e) => setCategory(e.target.value)}>
+          <option value={CATEGORY_FILTER}>All categories</option>
+          <option value={CATEGORY_NONE}>Uncategorised</option>
+          {BUSINESS_CATEGORIES.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
         </select>
         <select value={district} onChange={(e) => setDistrict(e.target.value)}>
           <option value={DISTRICTS_FILTER}>All districts</option>
@@ -166,7 +177,7 @@ export function UsersPage() {
             <tr>
               <th>Name</th>
               <th>Business</th>
-              <th>Role</th>
+              <th>Category</th>
               <th>District</th>
               <th>Phone</th>
               <th>Joined</th>
@@ -186,7 +197,14 @@ export function UsersPage() {
                     {verified && <span className="badge ok">Verified</span>}
                   </td>
                   <td>{u.businessName}</td>
-                  <td>{u.userType}</td>
+                  <td>
+                    {u.category ?? <span className="muted">—</span>}
+                    {/* Legacy role kept visible while both fields coexist, so
+                        ops can see which accounts still need a category (§3). */}
+                    {u.userType && (
+                      <span className="badge muted">{u.userType}</span>
+                    )}
+                  </td>
                   <td>{u.district}</td>
                   <td>{u.phone || '—'}</td>
                   <td>{formatDate(u.createdAt)}</td>

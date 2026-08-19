@@ -96,10 +96,11 @@ export function DashboardPage() {
   }, []);
 
   const metrics = useMemo(() => {
-    const vendors = users.filter((u) => u.userType === 'vendor').length;
-    const manufacturers = users.filter(
-      (u) => u.userType === 'manufacturer',
-    ).length;
+    // The old Vendor/Manufacturer split no longer describes the data — that
+    // role model was dropped for the 29-item `category` field (§7, §9). What
+    // matters now is migration progress: how many accounts have picked one.
+    const categorised = users.filter((u) => Boolean(u.category)).length;
+    const uncategorised = users.length - categorised;
     const byType: Record<string, number> = {};
     for (const l of listings) {
       byType[l.postType] = (byType[l.postType] ?? 0) + 1;
@@ -170,8 +171,8 @@ export function DashboardPage() {
 
     return {
       totalUsers: users.length,
-      vendors,
-      manufacturers,
+      categorised,
+      uncategorised,
       byType,
       totalInterests: interests.length,
       pendingPosts,
@@ -204,7 +205,7 @@ export function DashboardPage() {
           <p className="muted tiny">Users</p>
           <strong>{metrics.totalUsers}</strong>
           <p className="muted tiny">
-            {metrics.vendors} Vendor · {metrics.manufacturers} Manufacturer
+            {metrics.categorised} categorised · {metrics.uncategorised} uncategorised
           </p>
         </article>
         <article className="metric-card">
