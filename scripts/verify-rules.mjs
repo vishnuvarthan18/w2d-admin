@@ -176,12 +176,38 @@ async function main() {
   // a user from changing their own status/verified, and isNotSuspended() treats
   // an absent status as active — so omitting it keeps re-runs idempotent.
 
+  // Two fixture businesses in DIFFERENT categories. They used to be a
+  // Manufacturer and a Vendor; that role model was dropped (DECISIONS.md §7)
+  // and `userType` is no longer written by anything. The labels are kept only
+  // so the case names below still read the same — what they now prove is that
+  // *any* category can raise a requirement, which is the actual §7 change.
   const BIZ = [
-    { label: 'manufacturer', email: 'rules-mfr@wedding2day.local', userType: 'manufacturer' },
-    { label: 'vendor', email: 'rules-vendor@wedding2day.local', userType: 'vendor' },
+    {
+      label: 'manufacturer',
+      email: 'rules-mfr@wedding2day.local',
+      category: 'Audio and Lighting',
+    },
+    {
+      label: 'vendor',
+      email: 'rules-vendor@wedding2day.local',
+      category: 'Stage Decoration',
+    },
   ];
   const PASSWORD = 'rules-check-123';
   const uids = {};
+
+  /**
+   * UTC day key for the daily-cap counters — must match `dayKey()` in
+   * `w2d-app/constants/rateLimits.ts` and `todayKey()` in `firestore.rules`.
+   */
+  const todayKey = () => {
+    const now = new Date();
+    return String(
+      now.getUTCFullYear() * 10000 +
+        (now.getUTCMonth() + 1) * 100 +
+        now.getUTCDate(),
+    );
+  };
 
   for (const biz of BIZ) {
     const cred = await signInOrCreate(biz.email, PASSWORD);
@@ -191,13 +217,37 @@ async function main() {
       {
         name: `Rules Check ${biz.label}`,
         businessName: `Rules Check ${biz.label} Co`,
-        userType: biz.userType,
+        category: biz.category,
         district: 'Chennai',
         phone: '+910000000000',
-        categories: [],
       },
       { merge: true },
     );
+    // Creating a listing now requires today's rate-limit counter to exist and
+    // be under cap (§6, §14 item 6). Without it the fixtures below are denied
+    // before any of the rules actually under test are reached.
+    //
+    // Written exactly the way the app writes it, and for the same reasons:
+    //  * `posts: 1`, not `0` — the rules refuse to create a counter recording
+    //    no action at all (the sum must be exactly 1), because a client able
+    //    to write a zeroed counter could also reset one. So this is a real
+    //    first-post-of-the-day. One charged post leaves ample headroom for the
+    //    handful of listings this script creates.
+    //  * create ONLY when absent — an update that changes nothing has
+    //    `affectedKeys().size() == 0` and is denied by the "exactly one
+    //    counter moved by one" rule. Re-running the script must not fail on
+    //    its own leftovers.
+    const counterRef = doc(
+      db,
+      'users',
+      cred.user.uid,
+      'rateLimits',
+      todayKey(),
+    );
+    const counterSnap = await getDoc(counterRef);
+    if (!counterSnap.exists()) {
+      await setDoc(counterRef, { reveals: 0, posts: 1, reports: 0 });
+    }
     await signOut(auth);
   }
 

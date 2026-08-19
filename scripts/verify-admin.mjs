@@ -53,27 +53,40 @@ async function main() {
     db.collection('reports').get(),
   ]);
   const pending = listings.docs.filter((d) => d.data().status === 'pending');
-  const vendors = users.docs.filter((d) => d.data().userType === 'vendor');
-  const manufacturers = users.docs.filter(
-    (d) => d.data().userType === 'manufacturer',
+
+  // Scoped to the `seed-` prefix rather than counting the whole collection.
+  // `verify-rules.mjs` leaves its own `rules-check-*` fixture users and
+  // listings behind in the same emulator, so a bare `users.size === 8` passes
+  // on a fresh emulator and fails on every run after — which is exactly the
+  // kind of flake that gets a verification script ignored.
+  const seedUsers = users.docs.filter((d) => d.id.startsWith('seed-user-'));
+  const seedListings = listings.docs.filter((d) =>
+    d.id.startsWith('seed-listing-'),
   );
-  assert(users.size === 8, `expected 8 users, got ${users.size}`);
-  assert(listings.size === 25, `expected 25 listings, got ${listings.size}`);
-  assert(pending.length >= 1, `expected ≥1 pending, got ${pending.length}`);
-  // Legacy role split — `userType` is superseded by `category` (§7, §9) but is
-  // intentionally still written, so this assertion still holds during migration.
-  assert(vendors.length === 4 && manufacturers.length === 4, 'role split 4/4');
-  // Migration state: seed.mjs deliberately categorises some users and leaves
-  // the rest absent, so both the populated and fallback paths get exercised.
-  const categorised = users.docs.filter((d) => Boolean(d.data().category));
+  assert(seedUsers.length === 8, `expected 8 seed users, got ${seedUsers.length}`);
   assert(
-    categorised.length > 0 && categorised.length < users.size,
-    `expected a MIX of categorised/uncategorised seed users, got ${categorised.length}/${users.size}`,
+    seedListings.length === 25,
+    `expected 25 seed listings, got ${seedListings.length}`,
+  );
+  assert(pending.length >= 1, `expected ≥1 pending, got ${pending.length}`);
+
+  // The old assertion here was `vendors === 4 && manufacturers === 4`, read
+  // from `users.userType`. That field is no longer written by anything —
+  // `w2d-app/scripts/seed.mjs` stopped writing it when the Vendor/Manufacturer
+  // split was dropped (DECISIONS.md §7), so the assertion could only ever fail
+  // from that point on. What actually needs asserting now is the migration
+  // state it was standing in for: some accounts have a category (§9) and some
+  // do not, so both the populated and the fallback UI paths get exercised.
+  const legacyRoles = seedUsers.filter((d) => 'userType' in d.data()).length;
+  const categorised = seedUsers.filter((d) => Boolean(d.data().category));
+  assert(
+    categorised.length > 0 && categorised.length < seedUsers.length,
+    `expected a MIX of categorised/uncategorised seed users, got ${categorised.length}/${seedUsers.length}`,
   );
   assert(interests.size >= 1, 'expected ≥1 interest');
   assert(reports.size >= 1, 'expected ≥1 report');
   results.push(
-    `A2.1 metrics: PASS (users=${users.size} v=${vendors.length}/m=${manufacturers.length} categorised=${categorised.length} listings=${listings.size} pending=${pending.length} interests=${interests.size} reports=${reports.size})`,
+    `A2.1 metrics: PASS (seedUsers=${seedUsers.length} categorised=${categorised.length}/${seedUsers.length} legacyUserType=${legacyRoles} seedListings=${seedListings.length} pending=${pending.length} interests=${interests.size} reports=${reports.size})`,
   );
 
   // --- A3.2 suspend/verify ---
