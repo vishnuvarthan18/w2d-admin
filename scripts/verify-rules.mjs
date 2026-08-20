@@ -238,6 +238,22 @@ async function main() {
       category: 'Catering',
       role: 'vendor',
     },
+    {
+      // A third business that exists ONLY to be a subject nobody ever holds a
+      // grant for (§6). It is needed because reveal grants are UNDELETABLE by
+      // design — that immutability is what stops a grant being dropped and
+      // re-minted for free — so a script cannot clean one up afterwards.
+      //
+      // Without this fixture, "reading a contact document with no grant is
+      // denied" passed on a fresh emulator and FAILED on every run after, since
+      // the grant minted two cases later was still there. That is precisely the
+      // flake shape that gets a verification script quietly ignored, and it is
+      // the second time this file has had one.
+      label: 'ungranted',
+      email: 'rules-ungranted@wedding2day.local',
+      category: 'Furniture for Wedding',
+      role: 'manufacturer',
+    },
   ];
   const PASSWORD = 'rules-check-123';
   const uids = {};
@@ -456,35 +472,66 @@ async function main() {
 
   // Case 13b — without a grant, the contact document is unreadable. This is the
   // step that used to hand over a number for free.
+  //
+  // Reads the `ungranted` fixture, NOT the vendor: case 13c below mints a grant
+  // for the vendor, and grants cannot be deleted, so re-using the same subject
+  // made this assertion pass once and fail forever after. See BIZ[2]'s note.
   await expectDenied('case 13b: read a contact document with no grant', () =>
-    getDoc(doc(db, 'users', uids.vendor, 'contact', 'info')),
+    getDoc(doc(db, 'users', uids.ungranted, 'contact', 'info')),
   );
   results.push('case 13b — no grant, no number: PASS');
 
-  // Case 13c — with a grant, it is readable. Minted by the viewer, as the app
-  // does, so the create rule is genuinely exercised rather than bypassed.
+  // Case 13c — with a grant, the number is readable. Minted by the viewer, as
+  // the app does, so the create rule is genuinely exercised rather than
+  // bypassed with the Admin SDK.
+  //
+  // The mint is CONDITIONAL, and that is forced by the design rather than a
+  // shortcut: a grant is immutable, so a re-`setDoc` on an existing one is an
+  // `update` and is denied — correctly, since a grant that could be rewritten
+  // would be a second number for free. This script cannot clear it (grants are
+  // undeletable too), so on a second run against the same emulator the grant is
+  // simply already there.
+  //
+  // What that costs, stated plainly: on a re-run this case verifies the READ
+  // but not the CREATE. The create is verified from scratch on every run by
+  // `w2d-app/tests/rules.test.mjs`, which calls `clearFirestore()` before each
+  // test and covers the cap gate, the id/payload match, self-grants, extra
+  // fields and suspension. This script's distinct value is exercising the same
+  // rules through a real Auth client, and the read assertion below does that
+  // unconditionally.
   const grantRef = doc(
     db,
     'revealGrants',
     `${uids.vendor}_${uids.manufacturer}`,
   );
-  await expectAllowed('case 13c: mint own reveal grant', () =>
-    setDoc(grantRef, {
-      subjectId: uids.vendor,
-      viewerId: uids.manufacturer,
-      createdAt: serverTimestamp(),
-    }),
+  const alreadyGranted = await getDoc(
+    doc(db, 'users', uids.vendor, 'contact', 'info'),
+  ).then(
+    () => true,
+    () => false,
   );
+  if (!alreadyGranted) {
+    await expectAllowed('case 13c: mint own reveal grant', () =>
+      setDoc(grantRef, {
+        subjectId: uids.vendor,
+        viewerId: uids.manufacturer,
+        createdAt: serverTimestamp(),
+      }),
+    );
+  }
   await expectAllowed('case 13c: read the contact document with a grant', () =>
     getDoc(doc(db, 'users', uids.vendor, 'contact', 'info')),
   );
-  results.push('case 13c — grant unlocks exactly one number: PASS');
+  results.push(
+    'case 13c — grant unlocks exactly one number: PASS' +
+      (alreadyGranted ? ' (grant carried over from an earlier run)' : ''),
+  );
 
   // Case 13d — a grant cannot be minted on someone else's behalf, and cannot be
   // deleted and re-minted (which would be a second number for free).
   await expectDenied('case 13d: mint a grant for a third party', () =>
-    setDoc(doc(db, 'revealGrants', `${uids.vendor}_third-party-uid`), {
-      subjectId: uids.vendor,
+    setDoc(doc(db, 'revealGrants', `${uids.ungranted}_third-party-uid`), {
+      subjectId: uids.ungranted,
       viewerId: 'third-party-uid',
       createdAt: serverTimestamp(),
     }),
