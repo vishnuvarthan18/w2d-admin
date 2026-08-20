@@ -85,12 +85,11 @@ async function main() {
 
   // Ensure a couple of seed users have explicit status/verified for A3 tests.
   //
-  // NOTE: this script deliberately does NOT write `category` (DECISIONS.md §9).
-  // Despite §13's note, it never seeded `userType` either — these are
-  // status/verified merges only. Category fixture data is owned solely by
-  // `w2d-app/scripts/seed.mjs`, which already assigns categories to a subset of
-  // seed users; writing it here too would duplicate the values across two repos
-  // and let them drift.
+  // NOTE: this script deliberately does NOT write `category` or `role` onto
+  // `seed-user-*` (DECISIONS.md §9, §7). Those values are owned solely by
+  // `w2d-app/scripts/seed.mjs`; writing them here too would duplicate the same
+  // fixture across two repos and let the two drift — exactly the risk C5
+  // already flags for the duplicated category list.
   await db.collection('users').doc('seed-user-1').set(
     { status: 'active', verified: false },
     { merge: true },
@@ -99,6 +98,62 @@ async function main() {
     { status: 'active', verified: true },
     { merge: true },
   );
+
+  // ── Role fixtures, admin-OWNED (§7, §11 — 2026-08-20) ──────────────────
+  //
+  // Separate `admin-seed-*` ids rather than merges onto `seed-user-*`, for the
+  // reason above: these are wholly this script's, so there is nothing to drift
+  // against. They exist so the Users screen's role filter and the Dashboard's
+  // role tile have data to show even when `w2d-app/scripts/seed.mjs` has not
+  // been run in this emulator — the admin repo has to be verifiable on its own.
+  //
+  // All three states are represented on purpose. The `null`-role row is the one
+  // that matters most for ops: it is what a real pre-migration account looks
+  // like (§3), and the admin UI has to render it without a badge rather than
+  // crash or invent one.
+  const ROLE_FIXTURES = [
+    {
+      id: 'admin-seed-manufacturer',
+      name: 'Role Fixture Mfr',
+      businessName: 'Fixture Furniture Works',
+      category: 'Furniture for Wedding', // §9 row 22 → Manufacturer
+      role: 'manufacturer',
+      district: 'Madurai',
+    },
+    {
+      id: 'admin-seed-vendor',
+      name: 'Role Fixture Vendor',
+      businessName: 'Fixture Catering Co',
+      category: 'Catering', // §9 row 10 → Vendor
+      role: 'vendor',
+      district: 'Coimbatore',
+    },
+    {
+      id: 'admin-seed-norole',
+      name: 'Role Fixture Pre-migration',
+      businessName: 'Fixture Unmigrated Traders',
+      category: null,
+      role: null,
+      district: 'Chennai',
+    },
+  ];
+
+  for (const fixture of ROLE_FIXTURES) {
+    await db.collection('users').doc(fixture.id).set(
+      {
+        name: fixture.name,
+        businessName: fixture.businessName,
+        category: fixture.category,
+        role: fixture.role,
+        district: fixture.district,
+        phone: '+91900000' + fixture.id.length.toString().padStart(4, '0'),
+        status: 'active',
+        verified: false,
+        createdAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
 
   console.log(
     JSON.stringify(
@@ -117,7 +172,13 @@ async function main() {
           created: nonAdmin.created,
           note: 'No admins/{uid} — sign-in must be rejected by app',
         },
-        seeded: ['admins', 'interests sample', 'reports sample', 'user flags'],
+        seeded: [
+          'admins',
+          'interests sample',
+          'reports sample',
+          'user flags',
+          'role fixtures (manufacturer / vendor / pre-migration)',
+        ],
       },
       null,
       2,

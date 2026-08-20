@@ -70,23 +70,70 @@ async function main() {
   );
   assert(pending.length >= 1, `expected ≥1 pending, got ${pending.length}`);
 
-  // The old assertion here was `vendors === 4 && manufacturers === 4`, read
-  // from `users.userType`. That field is no longer written by anything —
-  // `w2d-app/scripts/seed.mjs` stopped writing it when the Vendor/Manufacturer
-  // split was dropped (DECISIONS.md §7), so the assertion could only ever fail
-  // from that point on. What actually needs asserting now is the migration
-  // state it was standing in for: some accounts have a category (§9) and some
-  // do not, so both the populated and the fallback UI paths get exercised.
+  // HISTORY, because this assertion has now been rewritten twice and the next
+  // reader should not have to guess which model it is on:
+  //   * originally `vendors === 4 && manufacturers === 4`, read from
+  //     `users.userType` — the 2026-08-01 role model;
+  //   * then a category-only MIX check, after the role split was dropped on
+  //     2026-08-19 and `userType` stopped being written by anything;
+  //   * now a category AND role MIX check, because the role split is back as a
+  //     NEW field, `role` (DECISIONS.md §0b, §7, restored 2026-08-20).
+  //
+  // `userType` stays asserted at ZERO. That is the part that must not be
+  // inverted: §0b is explicit that the restore is not a revival of `userType`,
+  // so anything writing it again is a regression, not a migration.
+  //
+  // The MIX shape is what both checks are really for: the admin UI has a
+  // populated path and a fallback path for each field, and a fixture set that
+  // is all-populated or all-empty silently exercises only one of them.
   const legacyRoles = seedUsers.filter((d) => 'userType' in d.data()).length;
   const categorised = seedUsers.filter((d) => Boolean(d.data().category));
+  const roled = seedUsers.filter((d) => Boolean(d.data().role));
   assert(
     categorised.length > 0 && categorised.length < seedUsers.length,
     `expected a MIX of categorised/uncategorised seed users, got ${categorised.length}/${seedUsers.length}`,
   );
+  assert(
+    roled.length > 0 && roled.length < seedUsers.length,
+    `expected a MIX of seed users with/without a role (§7), got ${roled.length}/${seedUsers.length}`,
+  );
+  assert(
+    legacyRoles === 0,
+    `expected NO seed user to carry the retired userType field (§0b), got ${legacyRoles}`,
+  );
+  // Both roles must be present, or the Users screen's role filter has nothing
+  // to distinguish and a filter that returns everything looks like it works.
+  const vendors = seedUsers.filter((d) => d.data().role === 'vendor').length;
+  const manufacturers = seedUsers.filter(
+    (d) => d.data().role === 'manufacturer',
+  ).length;
+  assert(
+    vendors > 0 && manufacturers > 0,
+    `expected both roles among seed users (§7), got vendor=${vendors} manufacturer=${manufacturers}`,
+  );
+
+  // Every seeded listing that HAS a role tag must be consistent with §4's
+  // table: requirements are Vendor-posted, supply listings Manufacturer-posted.
+  // An untagged listing is legitimate (§3 does not backfill), so it is skipped
+  // rather than failed.
+  const misTagged = seedListings.filter((d) => {
+    const data = d.data();
+    if (!data.sellerRole) return false;
+    return data.postType === 'requirement'
+      ? data.sellerRole !== 'vendor'
+      : data.sellerRole !== 'manufacturer';
+  });
+  assert(
+    misTagged.length === 0,
+    `expected no seed listing to contradict §4's role table, got ${misTagged.length} (${misTagged
+      .map((d) => d.id)
+      .join(', ')})`,
+  );
+
   assert(interests.size >= 1, 'expected ≥1 interest');
   assert(reports.size >= 1, 'expected ≥1 report');
   results.push(
-    `A2.1 metrics: PASS (seedUsers=${seedUsers.length} categorised=${categorised.length}/${seedUsers.length} legacyUserType=${legacyRoles} seedListings=${seedListings.length} pending=${pending.length} interests=${interests.size} reports=${reports.size})`,
+    `A2.1 metrics: PASS (seedUsers=${seedUsers.length} categorised=${categorised.length}/${seedUsers.length} roled=${roled.length}/${seedUsers.length} vendor=${vendors} manufacturer=${manufacturers} legacyUserType=${legacyRoles} seedListings=${seedListings.length} pending=${pending.length} interests=${interests.size} reports=${reports.size})`,
   );
 
   // --- A3.2 suspend/verify ---

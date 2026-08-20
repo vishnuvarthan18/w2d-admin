@@ -21,6 +21,7 @@ import {
   getFirestore,
   serverTimestamp,
   setDoc,
+  terminate,
   updateDoc,
 } from 'firebase/firestore';
 
@@ -95,6 +96,38 @@ function requirementDoc(sellerId) {
   };
 }
 
+/**
+ * A supply listing (§4: sell-used / sell-new / rental), the other half of the
+ * symmetric role gate restored on 2026-08-20 (§0b, §7).
+ *
+ * The old version of this script only ever created requirements, because the
+ * 2026-08-01 gate only restricted requirements. Symmetric gating means the
+ * supply direction now needs its own fixture — a role model tested in one
+ * direction only is exactly the half-verified state §0's accuracy correction
+ * found last time.
+ */
+function supplyDoc(sellerId, postType = 'sell-used') {
+  return {
+    createdAt: serverTimestamp(),
+    sellerId,
+    postType,
+    title: `Rules check — ${postType} post`,
+    category: 'Furniture for Wedding',
+    condition: postType === 'sell-new' ? 'New' : 'Used - Good',
+    price: 4500,
+    quantity: 2,
+    district: 'Chennai',
+    description: 'Created by verify-rules.mjs. Safe to delete.',
+    imageUrls: [],
+    status: 'pending',
+    deliveryOption: 'both',
+    negotiable: false,
+    neededBy: null,
+    viewCount: 0,
+    interestCount: 0,
+  };
+}
+
 async function main() {
   const results = [];
 
@@ -160,13 +193,26 @@ async function main() {
   results.push('admin report read: PASS');
   await signOut(auth);
 
-  // ── Requirement creation is open to EVERY business (DECISIONS.md §4, §7) ──
+  // ── SYMMETRIC role gate on listing creation (§0b, §4, §7) ───────────────
   //
-  // The 2026-08-01 rule gated `postType: 'requirement'` creation on
-  // `users/{uid}.userType == 'vendor'`. That gate was removed 2026-08-19 —
-  // category/role is descriptive, never permission-gating. Cases 1 and 2 prove
-  // the gate is gone; cases 3 and 4 prove removing it did NOT loosen the
-  // suspension or ownership guards that share the same rule.
+  // This block has been inverted twice, so here is the whole history:
+  //   * 2026-08-01: `postType: 'requirement'` required
+  //     `users/{uid}.userType == 'vendor'`. Nothing gated supply listings.
+  //   * 2026-08-19: that gate was REMOVED. This script then asserted the
+  //     ABSENCE of a role gate — case 1 proved a "manufacturer" COULD create a
+  //     requirement.
+  //   * 2026-08-20: the gate is BACK, as a new field (`role`, not `userType`)
+  //     and symmetric in both directions. Case 1's assertion is therefore
+  //     INVERTED below, and two new cases cover the supply direction the old
+  //     model never gated at all.
+  //
+  // The labels are real again: these fixtures genuinely carry `role`, and their
+  // categories are the ones §9's table maps to that role.
+  //
+  // Cases 3 and 4 exist to prove the restored gate did not swallow the
+  // suspension and ownership guards that share the same rule — a create can be
+  // denied for three separate reasons now, so each case is arranged so only ONE
+  // of them applies.
   //
   // Profile docs are written by the account itself (rules permit self-create)
   // and suspension is applied by the admin account — no admin-SDK bypass, so
@@ -175,22 +221,22 @@ async function main() {
   // NOTE: `status` is deliberately omitted from the profile writes. Rules block
   // a user from changing their own status/verified, and isNotSuspended() treats
   // an absent status as active — so omitting it keeps re-runs idempotent.
-
-  // Two fixture businesses in DIFFERENT categories. They used to be a
-  // Manufacturer and a Vendor; that role model was dropped (DECISIONS.md §7)
-  // and `userType` is no longer written by anything. The labels are kept only
-  // so the case names below still read the same — what they now prove is that
-  // *any* category can raise a requirement, which is the actual §7 change.
   const BIZ = [
     {
       label: 'manufacturer',
       email: 'rules-mfr@wedding2day.local',
+      // §9 row 28: Audio and Lighting → Both, default Manufacturer.
       category: 'Audio and Lighting',
+      role: 'manufacturer',
     },
     {
       label: 'vendor',
       email: 'rules-vendor@wedding2day.local',
-      category: 'Stage Decoration',
+      // §9 row 10: Catering → Vendor. The previous fixture used 'Stage
+      // Decoration' for its "vendor", which §9 maps to Manufacturer — harmless
+      // while the label meant nothing, wrong now that it does.
+      category: 'Catering',
+      role: 'vendor',
     },
   ];
   const PASSWORD = 'rules-check-123';
@@ -218,6 +264,10 @@ async function main() {
         name: `Rules Check ${biz.label}`,
         businessName: `Rules Check ${biz.label} Co`,
         category: biz.category,
+        // The field the restored gate reads (§7). Without it every create below
+        // is denied by the role check before reaching the rule under test — an
+        // absent role fails BOTH sides of the symmetric gate.
+        role: biz.role,
         district: 'Chennai',
         phone: '+910000000000',
       },
@@ -251,47 +301,76 @@ async function main() {
     await signOut(auth);
   }
 
-  // Case 1 — manufacturer creates a requirement. Was DENIED before the change.
+  // Case 1 — INVERTED 2026-08-20. A Manufacturer may NOT raise a requirement.
+  // This assertion read `expectAllowed` under the 2026-08-19 no-role model;
+  // §4's table now makes `requirement` Vendor-only, in both directions.
   await signInOrCreate(BIZ[0].email, PASSWORD);
   const mfrReq = doc(db, 'listings', 'rules-check-req-mfr');
   await deleteDoc(mfrReq).catch(() => {});
-  await expectAllowed('case 1: manufacturer creates requirement', () =>
+  await expectDenied('case 1: manufacturer creates requirement', () =>
     setDoc(mfrReq, requirementDoc(uids.manufacturer)),
   );
-  results.push('case 1 — manufacturer CAN create requirement: PASS');
+  results.push('case 1 — manufacturer CANNOT create requirement (§7): PASS');
 
-  // Case 4 — ownership guard intact: cannot post as another account.
-  await expectDenied('case 4: create with someone else\'s sellerId', () =>
-    setDoc(doc(db, 'listings', 'rules-check-req-spoof'), requirementDoc(uids.vendor)),
+  // Case 1b — the same account CAN create a supply listing. Without this, case
+  // 1 would also pass if the rules simply denied that account everything.
+  const mfrSupply = doc(db, 'listings', 'rules-check-supply-mfr');
+  await deleteDoc(mfrSupply).catch(() => {});
+  await expectAllowed('case 1b: manufacturer creates supply listing', () =>
+    setDoc(mfrSupply, supplyDoc(uids.manufacturer)),
+  );
+  results.push('case 1b — manufacturer CAN create supply listing (§7): PASS');
+
+  // Case 4 — ownership guard intact: cannot post as another account. Uses a
+  // SUPPLY doc so the role gate would pass for this signed-in Manufacturer and
+  // the only thing left to deny it is the sellerId mismatch.
+  await expectDenied("case 4: create with someone else's sellerId", () =>
+    setDoc(doc(db, 'listings', 'rules-check-supply-spoof'), supplyDoc(uids.vendor)),
   );
   results.push('case 4 — sellerId spoof still denied: PASS');
-  await deleteDoc(mfrReq).catch(() => {});
+  await deleteDoc(mfrSupply).catch(() => {});
   await signOut(auth);
 
-  // Case 2 — vendor creates a requirement. Was allowed before; must stay allowed.
+  // Case 2 — vendor creates a requirement. Allowed under the 2026-08-01 model,
+  // allowed under the 2026-08-19 model, allowed now: the one case all three
+  // versions of §7 agree on.
   await signInOrCreate(BIZ[1].email, PASSWORD);
   const vendorReq = doc(db, 'listings', 'rules-check-req-vendor');
   await deleteDoc(vendorReq).catch(() => {});
   await expectAllowed('case 2: vendor creates requirement', () =>
     setDoc(vendorReq, requirementDoc(uids.vendor)),
   );
-  results.push('case 2 — vendor CAN still create requirement: PASS');
+  results.push('case 2 — vendor CAN create requirement (§7): PASS');
+
+  // Case 2b — the other new half of the symmetry: a Vendor may NOT post supply.
+  // Nothing gated this direction under either previous model.
+  await expectDenied('case 2b: vendor creates supply listing', () =>
+    setDoc(doc(db, 'listings', 'rules-check-supply-vendor'), supplyDoc(uids.vendor)),
+  );
+  results.push('case 2b — vendor CANNOT create supply listing (§7): PASS');
   await deleteDoc(vendorReq).catch(() => {});
   await signOut(auth);
 
-  // Case 3 — suspension guard intact. Admin suspends, then the account retries.
+  // Case 3 — suspension guard intact. Suspends the VENDOR and retries the one
+  // create that account is otherwise entitled to make, so suspension is the
+  // ONLY reason left for the denial. (Previously this suspended the
+  // manufacturer and retried a requirement — now denied by role as well, which
+  // would make the case prove nothing about suspension.)
   const adm3 = await signInWithEmailAndPassword(
     auth,
     'admin@wedding2day.local',
     'admin-pass-123',
   );
   void adm3;
-  await updateDoc(doc(db, 'users', uids.manufacturer), { status: 'suspended' });
+  await updateDoc(doc(db, 'users', uids.vendor), { status: 'suspended' });
   await signOut(auth);
 
-  await signInOrCreate(BIZ[0].email, PASSWORD);
-  await expectDenied('case 3: suspended account creates requirement', () =>
-    setDoc(doc(db, 'listings', 'rules-check-req-suspended'), requirementDoc(uids.manufacturer)),
+  await signInOrCreate(BIZ[1].email, PASSWORD);
+  await expectDenied('case 3: suspended vendor creates requirement', () =>
+    setDoc(
+      doc(db, 'listings', 'rules-check-req-suspended'),
+      requirementDoc(uids.vendor),
+    ),
   );
   results.push('case 3 — suspended account still denied: PASS');
   await signOut(auth);
@@ -302,8 +381,48 @@ async function main() {
     'admin@wedding2day.local',
     'admin-pass-123',
   );
-  await updateDoc(doc(db, 'users', uids.manufacturer), { status: 'active' });
+  await updateDoc(doc(db, 'users', uids.vendor), { status: 'active' });
   await signOut(auth);
+
+  // Case 12 — catalog is MANUFACTURER-EXCLUSIVE (§4, §7). The 2026-08-19 model
+  // opened it to everyone; this asserts the reversal, in both directions.
+  // Numbered 12, not 5: the public-profile block below already owns cases 5-11,
+  // and two different "case 5"s in one output is how a failing case gets
+  // attributed to the wrong assertion.
+  const catalogItem = {
+    createdAt: serverTimestamp(),
+    title: 'Rules check — catalog item',
+    category: 'Furniture for Wedding',
+    price: 2500,
+    description: 'Created by verify-rules.mjs. Safe to delete.',
+    imageUrls: [],
+  };
+
+  await signInOrCreate(BIZ[0].email, PASSWORD);
+  const mfrCatalog = doc(
+    db,
+    'users',
+    uids.manufacturer,
+    'catalogItems',
+    'rules-check-catalog-mfr',
+  );
+  await deleteDoc(mfrCatalog).catch(() => {});
+  await expectAllowed('case 12: manufacturer creates catalog item', () =>
+    setDoc(mfrCatalog, catalogItem),
+  );
+  await deleteDoc(mfrCatalog).catch(() => {});
+  await signOut(auth);
+  results.push('case 12 — manufacturer CAN create catalog item (§4): PASS');
+
+  await signInOrCreate(BIZ[1].email, PASSWORD);
+  await expectDenied('case 12b: vendor creates catalog item', () =>
+    setDoc(
+      doc(db, 'users', uids.vendor, 'catalogItems', 'rules-check-catalog-vendor'),
+      catalogItem,
+    ),
+  );
+  await signOut(auth);
+  results.push('case 12b — vendor CANNOT create catalog item (§4): PASS');
 
   // ── Public showcase profiles (DECISIONS.md §6a) ──────────────────────────
   //
@@ -322,6 +441,10 @@ async function main() {
       ownerId,
       businessName: 'Rules Check Decorators',
       category: 'Stage Decoration',
+      // §6a, 2026-08-20: `role` is now on the public-profile field allowlist.
+      // Including it here is what proves the allowlist actually admits it —
+      // a payload that omitted the new field would pass either way.
+      role: 'manufacturer',
       district: 'Chennai',
       phone: '+919000000001',
       whatsapp: '+919000000001',
@@ -398,7 +521,36 @@ async function main() {
   console.log(JSON.stringify({ ok: true, results }, null, 2));
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+/**
+ * Shuts the SDK down so a PASSING run actually returns.
+ *
+ * Without this the script hung forever on success while exiting cleanly on
+ * failure — the worst possible arrangement, and it makes `npm run verify`
+ * unusable in a script or in CI. The Firestore SDK holds open gRPC streams and
+ * Auth holds a token-refresh timer, so node has live handles and never exits on
+ * its own; `terminate()` closes the Firestore ones and the explicit exit covers
+ * the rest.
+ */
+async function shutdown() {
+  try {
+    await signOut(auth);
+  } catch {
+    // Already signed out, or the emulator went away. Not worth failing over.
+  }
+  try {
+    await terminate(db);
+  } catch {
+    // Same.
+  }
+}
+
+main()
+  .then(async () => {
+    await shutdown();
+    process.exit(0);
+  })
+  .catch(async (err) => {
+    console.error(err);
+    await shutdown();
+    process.exit(1);
+  });

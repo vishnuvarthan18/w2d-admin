@@ -7,6 +7,7 @@ import {
   type Timestamp,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { roleLabel } from '../lib/categories';
 import type { ListingDoc, ListingStatus } from '../lib/types';
 
 type StatusFilter = 'all' | 'pending' | ListingStatus | string;
@@ -232,6 +233,34 @@ export function ListingsPage({
                 <div>
                   <dt>Category</dt>
                   <dd>{selected.category}</dd>
+                </div>
+                <div>
+                  <dt>Seller role</dt>
+                  <dd>
+                    {/*
+                      §3, 2026-08-20: the denormalized `sellerRole`. Worth
+                      surfacing in the moderation queue because it is what makes
+                      a post legitimate under §4 — a `requirement` tagged
+                      `manufacturer` (or the reverse) can only be a pre-restore
+                      post, since the rules now refuse to create one.
+                      Absent on every listing made before 2026-08-20; §3 does
+                      not backfill, so "—" is expected, not a fault.
+                    */}
+                    {roleLabel(selected.sellerRole) || (
+                      <span className="muted">— (pre-2026-08-20 post)</span>
+                    )}
+                    {selected.sellerRole &&
+                      (selected.postType === 'requirement'
+                        ? selected.sellerRole !== 'vendor'
+                        : selected.sellerRole !== 'manufacturer') && (
+                        <span
+                          className="badge warn"
+                          title="This post's type and seller role contradict §4's table. Only possible for a post made while the gate was open (2026-08-19–20)."
+                        >
+                          contradicts §4
+                        </span>
+                      )}
+                  </dd>
                 </div>
                 <div>
                   <dt>District</dt>

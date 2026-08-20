@@ -96,11 +96,23 @@ export function DashboardPage() {
   }, []);
 
   const metrics = useMemo(() => {
-    // The old Vendor/Manufacturer split no longer describes the data — that
-    // role model was dropped for the 29-item `category` field (§7, §9). What
-    // matters now is migration progress: how many accounts have picked one.
+    // Two migrations, tracked separately, because they are two fields and an
+    // account can be through one and not the other (§0b, §3):
+    //   * `category` — the 29-item list, migrated 2026-08-19 (§9);
+    //   * `role` — Vendor/Manufacturer, restored 2026-08-20 (§7).
+    //
+    // The role split is BACK, but this is deliberately NOT the old
+    // vendor/manufacturer count read from `userType`: that field is retired and
+    // nothing writes it (§0b). `noRole` is the number that matters most for ops
+    // — those accounts can create nothing at all, because the symmetric rule
+    // gates deny both directions on an absent role.
     const categorised = users.filter((u) => Boolean(u.category)).length;
     const uncategorised = users.length - categorised;
+    const vendors = users.filter((u) => u.role === 'vendor').length;
+    const manufacturers = users.filter(
+      (u) => u.role === 'manufacturer',
+    ).length;
+    const noRole = users.length - vendors - manufacturers;
     const byType: Record<string, number> = {};
     for (const l of listings) {
       byType[l.postType] = (byType[l.postType] ?? 0) + 1;
@@ -173,6 +185,9 @@ export function DashboardPage() {
       totalUsers: users.length,
       categorised,
       uncategorised,
+      vendors,
+      manufacturers,
+      noRole,
       byType,
       totalInterests: interests.length,
       pendingPosts,
@@ -206,6 +221,16 @@ export function DashboardPage() {
           <strong>{metrics.totalUsers}</strong>
           <p className="muted tiny">
             {metrics.categorised} categorised · {metrics.uncategorised} uncategorised
+          </p>
+        </article>
+        <article className="metric-card">
+          <p className="muted tiny">Roles (§7)</p>
+          <strong>
+            {metrics.vendors} / {metrics.manufacturers}
+          </strong>
+          <p className="muted tiny">
+            vendor / manufacturer
+            {metrics.noRole > 0 ? ` · ${metrics.noRole} with NO role` : ''}
           </p>
         </article>
         <article className="metric-card">
