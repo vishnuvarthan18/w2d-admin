@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   collection,
+  collectionGroup,
   doc,
   getDocs,
   updateDoc,
@@ -69,11 +70,49 @@ export function UsersPage() {
     setLoading(true);
     setError(null);
     try {
-      const [usersSnap, listingsSnap] = await Promise.all([
+      /*
+        `phone` moved OUT of `users/{uid}` on 2026-08-20 and into
+        `users/{uid}/contact/info`, behind a per-pair reveal grant (§6). That
+        closed the enumeration gap in the mobile app — a signed-in account could
+        previously harvest numbers one user document at a time, straight past
+        §6's daily reveal cap.
+
+        The admin still needs numbers: ops answers support calls that arrive BY
+        phone, so the search box has to match on one. A collection-group query
+        gets all of them in ONE read instead of an N+1 walk, and the rules allow
+        it for `isAdmin()` only. An admin already had `list` on `users` and `get`
+        on every contact document, so this is convenience, not new capability.
+      */
+      const [usersSnap, listingsSnap, contactsSnap] = await Promise.all([
         getDocs(collection(db, 'users')),
         getDocs(collection(db, 'listings')),
+        getDocs(collectionGroup(db, 'contact')),
       ]);
-      setUsers(usersSnap.docs.map((d) => ({ id: d.id, ...d.data() }) as UserDoc));
+
+      // Keyed by the OWNER's uid, which is the contact document's grandparent —
+      // `users/{uid}/contact/info`, so `ref.parent.parent.id`.
+      const phones = new Map<string, string>();
+      for (const d of contactsSnap.docs) {
+        const ownerId = d.ref.parent.parent?.id;
+        if (ownerId) {
+          phones.set(ownerId, (d.data().phone as string | undefined) ?? '');
+        }
+      }
+
+      setUsers(
+        usersSnap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            ...data,
+            // The contact document wins. A `phone` still on `users/{uid}` means
+            // an account the §6 migration has not reached yet
+            // (`w2d-app/scripts/migrate-contacts.mjs`), and ops should see the
+            // number either way rather than a blank row.
+            phone: phones.get(d.id) ?? (data.phone as string | undefined) ?? '',
+          } as UserDoc;
+        }),
+      );
       setListings(
         listingsSnap.docs.map((d) => ({ id: d.id, ...d.data() }) as ListingDoc),
       );

@@ -146,13 +146,29 @@ async function main() {
         category: fixture.category,
         role: fixture.role,
         district: fixture.district,
-        phone: '+91900000' + fixture.id.length.toString().padStart(4, '0'),
+        // NO `phone` on this document. It moved to
+        // users/{uid}/contact/info on 2026-08-20 (§6) so that `users/{uid}` —
+        // readable by every signed-in account — no longer carries a harvestable
+        // number. Seeding the old shape would put back exactly the data
+        // `w2d-app/scripts/migrate-contacts.mjs` exists to remove.
         status: 'active',
         verified: false,
         createdAt: FieldValue.serverTimestamp(),
       },
       { merge: true },
     );
+    await db
+      .collection('users')
+      .doc(fixture.id)
+      .collection('contact')
+      .doc('info')
+      .set(
+        {
+          phone: '+91900000' + fixture.id.length.toString().padStart(4, '0'),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
   }
 
   console.log(
@@ -178,6 +194,7 @@ async function main() {
           'reports sample',
           'user flags',
           'role fixtures (manufacturer / vendor / pre-migration)',
+          'grant-gated contact docs for the role fixtures (§6)',
         ],
       },
       null,

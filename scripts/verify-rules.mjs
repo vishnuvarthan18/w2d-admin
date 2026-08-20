@@ -269,8 +269,15 @@ async function main() {
         // absent role fails BOTH sides of the symmetric gate.
         role: biz.role,
         district: 'Chennai',
-        phone: '+910000000000',
+        // NO `phone` here — §6 moved it to users/{uid}/contact/info on
+        // 2026-08-20. Written separately below so these fixtures match the
+        // shape the app now produces.
       },
+      { merge: true },
+    );
+    await setDoc(
+      doc(db, 'users', cred.user.uid, 'contact', 'info'),
+      { phone: '+910000000000', updatedAt: serverTimestamp() },
       { merge: true },
     );
     // Creating a listing now requires today's rate-limit counter to exist and
@@ -423,6 +430,78 @@ async function main() {
   );
   await signOut(auth);
   results.push('case 12b — vendor CANNOT create catalog item (§4): PASS');
+
+  // ── Reveal grants: the phone-enumeration fix (§6, 2026-08-20) ───────────
+  //
+  // Worth covering here as well as in `w2d-app/tests/rules.test.mjs`, because
+  // this script signs in as real Auth users against the real emulator, so it
+  // exercises the same rules through a different client and a different auth
+  // path. This is the most security-sensitive change of the 2026-08-20 pass.
+  await signInOrCreate(BIZ[0].email, PASSWORD);
+
+  // Case 13 — a signed-in account can still read another business's user
+  // document (it must: the reveal screen and the responders list need the
+  // identity), and that is now harmless because the number is not in it.
+  const otherUserRef = doc(db, 'users', uids.vendor);
+  const otherUserSnap = await getDoc(otherUserRef);
+  assert(
+    otherUserSnap.exists(),
+    'case 13: expected to be able to read another user document',
+  );
+  assert(
+    !('phone' in (otherUserSnap.data() ?? {})),
+    'case 13: users/{uid} still carries a `phone` field — the enumeration gap is reopened',
+  );
+  results.push('case 13 — users/{uid} carries no phone: PASS');
+
+  // Case 13b — without a grant, the contact document is unreadable. This is the
+  // step that used to hand over a number for free.
+  await expectDenied('case 13b: read a contact document with no grant', () =>
+    getDoc(doc(db, 'users', uids.vendor, 'contact', 'info')),
+  );
+  results.push('case 13b — no grant, no number: PASS');
+
+  // Case 13c — with a grant, it is readable. Minted by the viewer, as the app
+  // does, so the create rule is genuinely exercised rather than bypassed.
+  const grantRef = doc(
+    db,
+    'revealGrants',
+    `${uids.vendor}_${uids.manufacturer}`,
+  );
+  await expectAllowed('case 13c: mint own reveal grant', () =>
+    setDoc(grantRef, {
+      subjectId: uids.vendor,
+      viewerId: uids.manufacturer,
+      createdAt: serverTimestamp(),
+    }),
+  );
+  await expectAllowed('case 13c: read the contact document with a grant', () =>
+    getDoc(doc(db, 'users', uids.vendor, 'contact', 'info')),
+  );
+  results.push('case 13c — grant unlocks exactly one number: PASS');
+
+  // Case 13d — a grant cannot be minted on someone else's behalf, and cannot be
+  // deleted and re-minted (which would be a second number for free).
+  await expectDenied('case 13d: mint a grant for a third party', () =>
+    setDoc(doc(db, 'revealGrants', `${uids.vendor}_third-party-uid`), {
+      subjectId: uids.vendor,
+      viewerId: 'third-party-uid',
+      createdAt: serverTimestamp(),
+    }),
+  );
+  await expectDenied('case 13d: delete an existing grant', () =>
+    deleteDoc(grantRef),
+  );
+  results.push('case 13d — grants are self-only and immutable: PASS');
+
+  // Case 13e — a peer with a grant has READ on that one document, never write.
+  await expectDenied("case 13e: write another business's contact document", () =>
+    setDoc(doc(db, 'users', uids.vendor, 'contact', 'info'), {
+      phone: '+919999999999',
+    }),
+  );
+  results.push('case 13e — a grant is read access only: PASS');
+  await signOut(auth);
 
   // ── Public showcase profiles (DECISIONS.md §6a) ──────────────────────────
   //
